@@ -324,10 +324,25 @@ if not defined BASE_DIR (
 set "INSTALL_ROOT=%BASE_DIR%\%COMPANY%"
 set "TARGET_DIR=%INSTALL_ROOT%\%MACRO_NAME%"
 
+if not defined MACRO_NAME (
+  call :Log "ERROR: Macro name not set when computing target directory."
+  echo.
+  echo Internal error: macro selection missing.
+  pause
+  exit /b 1
+)
+
+if /i "%TARGET_DIR%"=="%INSTALL_ROOT%" (
+  call :Log "ERROR: Safety check failed (TARGET_DIR equals INSTALL_ROOT)."
+  echo.
+  echo Safety check failed for install path.
+  pause
+  exit /b 1
+)
+
 call :Log "Selected install directory: %TARGET_DIR%"
 
 if exist "%TARGET_DIR%" (
-  echo.
   echo The folder already exists:
   echo %TARGET_DIR%
   echo.
@@ -373,6 +388,9 @@ call :Progress 25 "Creating folders"
 mkdir "%WORKDIR%\download" >nul 2>&1
 mkdir "%WORKDIR%\extract" >nul 2>&1
 
+set "INSTALL_MARKER=%TARGET_DIR%\.__installing"
+> "%INSTALL_MARKER%" echo Installing... 2>> "%LOGFILE%"
+
 call :Progress 50 "Downloading from GitHub"
 set "PKGFILE=%WORKDIR%\download\%MACRO_REPO%.zip"
 call :DownloadLatestRelease "%GITHUB_OWNER%" "%MACRO_REPO%" "%PKGFILE%"
@@ -394,7 +412,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-call :VerifyExtractedSource "!EXTRACT_SRC!"
+call :VerifyExtractedSource "%EXTRACT_SRC%"
 if errorlevel 1 (
   call :Log "ERROR: Extracted source appears empty."
   echo.
@@ -405,7 +423,7 @@ if errorlevel 1 (
 )
 
 call :Progress 80 "Copying files"
-call :CopyToTarget "!EXTRACT_SRC!" "%TARGET_DIR%"
+call :CopyToTarget "%EXTRACT_SRC%" "%TARGET_DIR%"
 if errorlevel 1 (
   call :Log "ERROR: Copy failed."
   echo.
@@ -427,6 +445,7 @@ if errorlevel 1 (
 )
 
 call :Progress 100 "Finalizing installation"
+if defined INSTALL_MARKER if exist "%INSTALL_MARKER%" del /f /q "%INSTALL_MARKER%" >nul 2>> "%LOGFILE%"
 call :Log "Macro installed successfully: %MACRO_NAME%"
 exit /b 0
 
@@ -453,6 +472,9 @@ exit /b 0
 
 :CleanupPartial
 call :PreserveLogForFailure
+if defined INSTALL_MARKER (
+  if not exist "%INSTALL_MARKER%" exit /b 0
+)
 if defined TARGET_DIR (
   if exist "%TARGET_DIR%" (
     rmdir /s /q "%TARGET_DIR%" >nul 2>&1
@@ -525,7 +547,8 @@ call :Log "Extracting archive."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($zip,$extract) $ErrorActionPreference='Stop'; if(Test-Path -LiteralPath $extract){ Remove-Item -LiteralPath $extract -Recurse -Force }; $null=New-Item -ItemType Directory -Path $extract -Force; Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force; $items=Get-ChildItem -LiteralPath $extract -Force; if($items.Count -eq 1 -and $items[0].PSIsContainer){ Write-Output $items[0].FullName } else { Write-Output $extract } }" "%E_ZIP%" "%E_EXTRACT%" > "%WORKDIR%\extract_src.txt" 2>> "%LOGFILE%"
 if errorlevel 1 exit /b 1
 set "EXTRACT_SRC="
-for /f "usebackq delims=" %%S in ("%WORKDIR%\extract_src.txt") do set "EXTRACT_SRC=%%S"
+if not exist "%WORKDIR%\extract_src.txt" exit /b 1
+set /p "EXTRACT_SRC="<"%WORKDIR%\extract_src.txt"
 if not defined EXTRACT_SRC exit /b 1
 exit /b 0
 
@@ -543,7 +566,7 @@ exit /b 0
 :VerifyExtractedSource
 set "S_PATH=%~1"
 set "S_COUNT="
-for /f "usebackq delims=" %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ Write-Output 0; exit 0 }; $c=(Get-ChildItem -LiteralPath $p -Force -Recurse -File).Count; Write-Output $c }" "%S_PATH%"`) do set "S_COUNT=%%C"
+for /f "usebackq tokens=* delims= " %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ Write-Output 0; exit 0 }; $items=(Get-ChildItem -LiteralPath $p -Force -Recurse); $c=0; foreach($i in $items){ if($i.PSIsContainer){ continue }; $c++ }; Write-Output $c }" "%S_PATH%" 2^>^> "%LOGFILE%"`) do set "S_COUNT=%%C"
 if not defined S_COUNT exit /b 1
 set "S_NONNUM="
 for /f "delims=0123456789" %%D in ("%S_COUNT%") do set "S_NONNUM=1"
@@ -581,11 +604,11 @@ exit /b 0
 if not defined BOOT_LOGFILE exit /b 0
 if not defined TARGET_DIR exit /b 0
 
-echo(!LOGFILE!| find /i "!TARGET_DIR!" >nul
+echo(%LOGFILE%| find /i "%TARGET_DIR%" >nul
 if errorlevel 1 exit /b 0
 
-if exist "!LOGFILE!" (
-  copy /y "!LOGFILE!" "%BOOT_LOGFILE%" >nul 2>&1
+if exist "%LOGFILE%" (
+  copy /y "%LOGFILE%" "%BOOT_LOGFILE%" >nul 2>&1
   set "LOGFILE=%BOOT_LOGFILE%"
 )
 exit /b 0
@@ -606,7 +629,7 @@ mkdir "%UPD_DIR%" >nul 2>&1
 
 call :Log "Checking for installer updates..."
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($owner,$repo,$localTag,$zipPath,$extractDir,$outBat) $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $api=('https://api.github.com/repos/'+$owner+'/'+$repo+'/releases/latest'); $r=Invoke-RestMethod -Headers $headers -Uri $api; $tag=$r.tag_name; if(-not $tag){ 'NOUPDATE'; exit 0 }; if($tag -eq $localTag){ 'NOUPDATE'; exit 0 }; $zipUrl=$r.zipball_url; if(-not $zipUrl){ 'ERROR'; exit 0 }; Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $zipUrl -OutFile $zipPath; if(Test-Path -LiteralPath $extractDir){ Remove-Item -LiteralPath $extractDir -Recurse -Force }; $null=New-Item -ItemType Directory -Path $extractDir -Force; Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force; $bat=Get-ChildItem -LiteralPath $extractDir -Recurse -Filter 'installer.bat' ^| Select-Object -First 1; if(-not $bat){ 'ERROR'; exit 0 }; Copy-Item -LiteralPath $bat.FullName -Destination $outBat -Force; ('UPDATE'+"`t"+$tag) }" "%UPDATE_OWNER%" "%UPDATE_REPO%" "%INSTALLER_VERSION%" "%UPD_ZIP%" "%UPD_EXT%" "%UPD_NEW%" > "%UPD_RESULT%" 2>> "%LOGFILE%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($owner,$repo,$localTag,$zipPath,$extractDir,$outBat) $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $api=('https://api.github.com/repos/'+$owner+'/'+$repo+'/releases/latest'); $r=Invoke-RestMethod -Headers $headers -Uri $api; $tag=$r.tag_name; if(-not $tag){ 'NOUPDATE'; exit 0 }; if($tag -eq $localTag){ 'NOUPDATE'; exit 0 }; $zipUrl=$r.zipball_url; if(-not $zipUrl){ 'ERROR'; exit 0 }; Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $zipUrl -OutFile $zipPath; if(Test-Path -LiteralPath $extractDir){ Remove-Item -LiteralPath $extractDir -Recurse -Force }; $null=New-Item -ItemType Directory -Path $extractDir -Force; Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force; $bat=Get-ChildItem -LiteralPath $extractDir -Recurse -Filter 'installer.bat' ^| Select-Object -First 1; if(-not $bat){ 'ERROR'; exit 0 }; Copy-Item -LiteralPath $bat.FullName -Destination $outBat -Force; ('UPDATE'+([char]9)+$tag) }" "%UPDATE_OWNER%" "%UPDATE_REPO%" "%INSTALLER_VERSION%" "%UPD_ZIP%" "%UPD_EXT%" "%UPD_NEW%" > "%UPD_RESULT%" 2>> "%LOGFILE%"
 
 if not exist "%UPD_RESULT%" exit /b 0
 
@@ -643,13 +666,7 @@ exit /b 2
 :VerifyInstall
 set "V_PATH=%~1"
 set "V_COUNT="
-set "V_COUNT_FILE=%WORKDIR%\verify_count.txt"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p,$logPath,$company) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ '0'; exit 0 }; $items=(Get-ChildItem -LiteralPath $p -Force -Recurse); $c=0; $shown=0; foreach($i in $items){ if($i.PSIsContainer){ continue }; $n=$i.Name; if($n -like '*Installer.log'){ continue }; if($company -and ($n -ieq ($company+'Installer.log'))){ continue }; if($logPath -and ($i.FullName -eq $logPath)){ continue }; if($c -lt 999999999){ $c++ }; if($shown -lt 10){ Write-Output ('FILE\t'+$i.FullName); $shown++ } }; Write-Output ('COUNT\t'+$c) }" "%V_PATH%" "%LOGFILE%" "%COMPANY%" > "%V_COUNT_FILE%" 2>> "%LOGFILE%"
-if errorlevel 1 exit /b 1
-set "V_COUNT="
-for /f "usebackq tokens=1,2 delims=	" %%A in ("%V_COUNT_FILE%") do (
-  if /i "%%A"=="COUNT" set "V_COUNT=%%B"
-)
+for /f "usebackq tokens=* delims= " %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p,$logPath,$company) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ Write-Output 0; exit 0 }; $items=(Get-ChildItem -LiteralPath $p -Force -Recurse); $c=0; foreach($i in $items){ if($i.PSIsContainer){ continue }; $n=$i.Name; if($n -like '*Installer.log'){ continue }; if($company -and ($n -ieq ($company+'Installer.log'))){ continue }; if($logPath -and ($i.FullName -eq $logPath)){ continue }; $c++ }; Write-Output $c }" "%V_PATH%" "%LOGFILE%" "%COMPANY%" 2^>^> "%LOGFILE%"`) do set "V_COUNT=%%C"
 if not defined V_COUNT exit /b 1
 
 set "NONNUM="
