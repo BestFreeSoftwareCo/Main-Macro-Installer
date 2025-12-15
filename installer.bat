@@ -7,6 +7,9 @@ set "BOOT_LOGFILE=%TEMP%\BestFreeSoftwareCoInstaller.log"
 set "LOGFILE=%BOOT_LOGFILE%"
 set "WORKDIR=%TEMP%\BestFreeSoftwareCoInstaller_%RANDOM%%RANDOM%"
 set "GITHUB_OWNER=BestFreeSoftwareCo"
+set "INSTALLER_VERSION=mainv1"
+set "UPDATE_OWNER=BestFreeSoftwareCo"
+set "UPDATE_REPO=Main-Macro-Installer"
 set "PYTHON_URL=https://www.python.org/ftp/python/3.12.3/python-3.12.3-amd64.exe"
 set "AUTOIT_URL=https://www.autoitscript.com/cgi-bin/getfile.pl?autoit3/autoit-v3-setup.exe"
 
@@ -15,6 +18,9 @@ if errorlevel 1 exit /b 1
 
 call :Init
 if errorlevel 1 goto Fatal
+
+call :SelfUpdateCheck
+if errorlevel 2 goto End
 
 call :Header
 
@@ -546,6 +552,56 @@ if exist "%LOGFILE%" (
 set "LOGFILE=%TARGET_LOG%"
 call :Log "Log file location: %LOGFILE%"
 exit /b 0
+
+:SelfUpdateCheck
+set "SELF_PATH=%~f0"
+set "SELF_DIR=%~dp0"
+set "SELF_NAME=%~nx0"
+
+set "UPD_DIR=%TEMP%\%COMPANY%Updater_%RANDOM%%RANDOM%"
+set "UPD_RESULT=%UPD_DIR%\update_result.txt"
+set "UPD_NEW=%UPD_DIR%\%SELF_NAME%.new"
+set "UPD_ZIP=%UPD_DIR%\update.zip"
+set "UPD_EXT=%UPD_DIR%\src"
+set "UPD_SCRIPT=%UPD_DIR%\apply_update.bat"
+
+mkdir "%UPD_DIR%" >nul 2>&1
+
+call :Log "Checking for installer updates..."
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($owner,$repo,$localTag,$zipPath,$extractDir,$outBat) $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $api=('https://api.github.com/repos/'+$owner+'/'+$repo+'/releases/latest'); $r=Invoke-RestMethod -Headers $headers -Uri $api; $tag=$r.tag_name; if(-not $tag){ 'NOUPDATE'; exit 0 }; if($tag -eq $localTag){ 'NOUPDATE'; exit 0 }; $zipUrl=$r.zipball_url; if(-not $zipUrl){ 'ERROR'; exit 0 }; Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $zipUrl -OutFile $zipPath; if(Test-Path -LiteralPath $extractDir){ Remove-Item -LiteralPath $extractDir -Recurse -Force }; $null=New-Item -ItemType Directory -Path $extractDir -Force; Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force; $bat=Get-ChildItem -LiteralPath $extractDir -Recurse -Filter 'installer.bat' ^| Select-Object -First 1; if(-not $bat){ 'ERROR'; exit 0 }; Copy-Item -LiteralPath $bat.FullName -Destination $outBat -Force; ('UPDATE'+"`t"+$tag) }" "%UPDATE_OWNER%" "%UPDATE_REPO%" "%INSTALLER_VERSION%" "%UPD_ZIP%" "%UPD_EXT%" "%UPD_NEW%" > "%UPD_RESULT%" 2>> "%LOGFILE%"
+
+if not exist "%UPD_RESULT%" exit /b 0
+
+set "UPD_STATUS="
+set "UPD_TAG="
+for /f "usebackq tokens=1,2 delims=	" %%A in ("%UPD_RESULT%") do (
+  set "UPD_STATUS=%%A"
+  set "UPD_TAG=%%B"
+)
+
+if /i not "!UPD_STATUS!"=="UPDATE" exit /b 0
+if not exist "%UPD_NEW%" exit /b 0
+
+echo.
+echo Update available: !UPD_TAG! (current %INSTALLER_VERSION%)
+choice /C YN /N /M "Install update now? (Y = Yes, N = No)"
+if errorlevel 2 (
+  call :Log "Update available: !UPD_TAG! (current %INSTALLER_VERSION%). User chose NO."
+  exit /b 0
+)
+
+call :Log "Update available: !UPD_TAG! (current %INSTALLER_VERSION%). User chose YES. Applying update..."
+
+> "%UPD_SCRIPT%" echo @echo off
+>> "%UPD_SCRIPT%" echo setlocal EnableExtensions
+>> "%UPD_SCRIPT%" echo ping 127.0.0.1 -n 3 ^>nul
+>> "%UPD_SCRIPT%" echo copy /y "%UPD_NEW%" "%SELF_PATH%" ^>nul
+>> "%UPD_SCRIPT%" echo start "" "%SELF_PATH%"
+>> "%UPD_SCRIPT%" echo exit /b 0
+
+start "" /min cmd /c ""%UPD_SCRIPT%""
+exit /b 2
 
 :VerifyInstall
 set "V_PATH=%~1"
