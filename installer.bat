@@ -40,6 +40,7 @@ call :Completion
 goto End
 
 :Fatal
+call :PreserveLogForFailure
 call :Log "ERROR: Installer terminated due to an unexpected error."
 echo.
 echo ========================================
@@ -393,6 +394,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
+call :VerifyExtractedSource "!EXTRACT_SRC!"
+if errorlevel 1 (
+  call :Log "ERROR: Extracted source appears empty."
+  echo.
+  echo Installation failed: the downloaded package extracted but contained no files.
+  echo Please try again or check your antivirus/quarantine settings.
+  pause
+  exit /b 1
+)
+
 call :Progress 80 "Copying files"
 call :CopyToTarget "!EXTRACT_SRC!" "%TARGET_DIR%"
 if errorlevel 1 (
@@ -441,6 +452,7 @@ if /i "%LAUNCH%"=="Y" (
 exit /b 0
 
 :CleanupPartial
+call :PreserveLogForFailure
 if defined TARGET_DIR (
   if exist "%TARGET_DIR%" (
     rmdir /s /q "%TARGET_DIR%" >nul 2>&1
@@ -522,9 +534,21 @@ set "C_SRC=%~1"
 set "C_DEST=%~2"
 call :Log "Copying files to destination."
 if not exist "%C_SRC%" exit /b 1
-robocopy "%C_SRC%" "%C_DEST%" /E /R:1 /W:1
+robocopy "%C_SRC%" "%C_DEST%" /E /R:1 /W:1 /TEE /LOG+:"%LOGFILE%"
 set "RC=%errorlevel%"
-if %RC% GEQ 8 exit /b 1
+call :Log "Robocopy exit code: !RC!"
+if !RC! GEQ 8 exit /b 1
+exit /b 0
+
+:VerifyExtractedSource
+set "S_PATH=%~1"
+set "S_COUNT="
+for /f "usebackq delims=" %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ Write-Output 0; exit 0 }; $c=(Get-ChildItem -LiteralPath $p -Force -Recurse -File).Count; Write-Output $c }" "%S_PATH%"`) do set "S_COUNT=%%C"
+if not defined S_COUNT exit /b 1
+set "S_NONNUM="
+for /f "delims=0123456789" %%D in ("%S_COUNT%") do set "S_NONNUM=1"
+if defined S_NONNUM exit /b 1
+if %S_COUNT% LSS 1 exit /b 1
 exit /b 0
 
 :DownloadFile
@@ -551,6 +575,19 @@ if exist "%LOGFILE%" (
 
 set "LOGFILE=%TARGET_LOG%"
 call :Log "Log file location: %LOGFILE%"
+exit /b 0
+
+:PreserveLogForFailure
+if not defined BOOT_LOGFILE exit /b 0
+if not defined TARGET_DIR exit /b 0
+
+echo(!LOGFILE!| find /i "!TARGET_DIR!" >nul
+if errorlevel 1 exit /b 0
+
+if exist "!LOGFILE!" (
+  copy /y "!LOGFILE!" "%BOOT_LOGFILE%" >nul 2>&1
+  set "LOGFILE=%BOOT_LOGFILE%"
+)
 exit /b 0
 
 :SelfUpdateCheck
@@ -607,9 +644,12 @@ exit /b 2
 set "V_PATH=%~1"
 set "V_COUNT="
 set "V_COUNT_FILE=%WORKDIR%\verify_count.txt"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p) $ErrorActionPreference='Stop'; $c=(Get-ChildItem -LiteralPath $p -Force -Recurse).Count; Write-Output $c }" "%V_PATH%" > "%V_COUNT_FILE%" 2>> "%LOGFILE%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p,$logPath,$company) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ '0'; exit 0 }; $items=(Get-ChildItem -LiteralPath $p -Force -Recurse); $c=0; $shown=0; foreach($i in $items){ if($i.PSIsContainer){ continue }; $n=$i.Name; if($n -like '*Installer.log'){ continue }; if($company -and ($n -ieq ($company+'Installer.log'))){ continue }; if($logPath -and ($i.FullName -eq $logPath)){ continue }; if($c -lt 999999999){ $c++ }; if($shown -lt 10){ Write-Output ('FILE\t'+$i.FullName); $shown++ } }; Write-Output ('COUNT\t'+$c) }" "%V_PATH%" "%LOGFILE%" "%COMPANY%" > "%V_COUNT_FILE%" 2>> "%LOGFILE%"
 if errorlevel 1 exit /b 1
-for /f "usebackq tokens=* delims= " %%C in ("%V_COUNT_FILE%") do set "V_COUNT=%%C"
+set "V_COUNT="
+for /f "usebackq tokens=1,2 delims=	" %%A in ("%V_COUNT_FILE%") do (
+  if /i "%%A"=="COUNT" set "V_COUNT=%%B"
+)
 if not defined V_COUNT exit /b 1
 
 set "NONNUM="
