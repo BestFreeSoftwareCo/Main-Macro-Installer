@@ -91,6 +91,8 @@ set "INSTALL_ROOT="
 set "TARGET_DIR="
 set "MACRO_NAME="
 set "MACRO_REPO="
+set "DL_TAG="
+set "LAST_RELEASE_TAG="
 exit /b 0
 
 :Header
@@ -312,6 +314,8 @@ if "%LOCSEL%"=="4" (
   set /p "BASE_DIR=Enter full custom path: "
 )
 
+for /f "tokens=* delims= " %%A in ("%BASE_DIR%") do set "BASE_DIR=%%A"
+
 set "BASE_DIR=%BASE_DIR:"=%"
 
 if not defined BASE_DIR (
@@ -321,7 +325,18 @@ if not defined BASE_DIR (
   goto LocationMenuStart
 )
 
-set "INSTALL_ROOT=%BASE_DIR%\%COMPANY%"
+set "BASE_DIR_N=%BASE_DIR%"
+if "%BASE_DIR_N:~-1%"=="\" set "BASE_DIR_N=%BASE_DIR_N:~0,-1%"
+
+set "BASE_LAST="
+for %%I in ("%BASE_DIR_N%") do set "BASE_LAST=%%~nxI"
+
+if /i "%BASE_LAST%"=="%COMPANY%" (
+  set "INSTALL_ROOT=%BASE_DIR_N%"
+) else (
+  set "INSTALL_ROOT=%BASE_DIR_N%\%COMPANY%"
+)
+
 set "TARGET_DIR=%INSTALL_ROOT%\%MACRO_NAME%"
 
 if not defined MACRO_NAME (
@@ -341,6 +356,22 @@ if /i "%TARGET_DIR%"=="%INSTALL_ROOT%" (
 )
 
 call :Log "Selected install directory: %TARGET_DIR%"
+
+call :Log "Install root directory: %INSTALL_ROOT%"
+
+if exist "%INSTALL_ROOT%\" (
+  rem ok
+) else (
+  mkdir "%INSTALL_ROOT%" >nul 2>&1
+)
+
+if not exist "%INSTALL_ROOT%\" (
+  call :Log "ERROR: Unable to create install root folder."
+  echo.
+  echo Unable to create the install root folder.
+  pause
+  exit /b 1
+)
 
 if exist "%TARGET_DIR%" (
   echo The folder already exists:
@@ -446,6 +477,11 @@ if errorlevel 1 (
 
 call :Progress 100 "Finalizing installation"
 if defined INSTALL_MARKER if exist "%INSTALL_MARKER%" del /f /q "%INSTALL_MARKER%" >nul 2>> "%LOGFILE%"
+if defined LAST_RELEASE_TAG (
+  > "%TARGET_DIR%\.installed_version" echo %LAST_RELEASE_TAG% 2>> "%LOGFILE%"
+) else (
+  > "%TARGET_DIR%\.installed_version" echo unknown 2>> "%LOGFILE%"
+)
 call :Log "Macro installed successfully: %MACRO_NAME%"
 exit /b 0
 
@@ -461,6 +497,7 @@ echo Dependencies Installed: %DEP_SUMMARY%
 echo Location: %TARGET_DIR%
 echo Installed Items: %INSTALLED_ITEMS%
 echo.
+call :PostInstallUpdateCheck
 echo Thank you for using BestFreeSoftwareCo software!
 echo.
 echo Launch now? (Y/N)
@@ -532,9 +569,17 @@ set "D_REPO=%~2"
 set "D_OUT=%~3"
 call :Log "Resolving latest GitHub release for %D_OWNER%/%D_REPO%"
 set "DL_URL="
-for /f "usebackq delims=" %%U in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $owner='%D_OWNER%'; $repo='%D_REPO%'; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $url=$null; $defaultBranch='main'; try { $ri=Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/'+$owner+'/'+$repo); if($ri -and $ri.default_branch){ $defaultBranch=$ri.default_branch } } catch { } try { $r=Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/'+$owner+'/'+$repo+'/releases/latest'); if($r -and $r.assets){ foreach($a in $r.assets){ if($a.name -match '\.zip$'){ $url=$a.browser_download_url; break } } } if(-not $url -and $r -and $r.zipball_url){ $url=$r.zipball_url } } catch { $url=$null } if(-not $url){ $url='https://github.com/'+$owner+'/'+$repo+'/archive/refs/heads/'+$defaultBranch+'.zip' } Write-Output $url"`) do set "DL_URL=%%U"
+set "DL_TAG="
+set "LAST_RELEASE_TAG="
+for /f "usebackq tokens=1,2 delims=	" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $owner='%D_OWNER%'; $repo='%D_REPO%'; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $url=$null; $tag=$null; $defaultBranch='main'; try { $ri=Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/'+$owner+'/'+$repo); if($ri -and $ri.default_branch){ $defaultBranch=$ri.default_branch } } catch { } try { $r=Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/'+$owner+'/'+$repo+'/releases/latest'); if($r){ $tag=$r.tag_name }; if($r -and $r.assets){ foreach($a in $r.assets){ if($a.name -match '\.zip$'){ $url=$a.browser_download_url; break } } } if(-not $url -and $r -and $r.zipball_url){ $url=$r.zipball_url } } catch { $url=$null; $tag=$null } if(-not $url){ $url='https://github.com/'+$owner+'/'+$repo+'/archive/refs/heads/'+$defaultBranch+'.zip'; $tag=('branch:'+ $defaultBranch) } if(-not $tag){ $tag='unknown' } Write-Output ($url + ([char]9) + $tag)"`) do (
+  set "DL_URL=%%A"
+  set "DL_TAG=%%B"
+)
 if not defined DL_URL exit /b 1
+if not defined DL_TAG set "DL_TAG=unknown"
+set "LAST_RELEASE_TAG=%DL_TAG%"
 call :Log "Download URL: %DL_URL%"
+call :Log "Resolved version tag: %LAST_RELEASE_TAG%"
 call :DownloadFile "%DL_URL%" "%D_OUT%" "GitHub Package"
 if errorlevel 1 exit /b 1
 if not exist "%D_OUT%" exit /b 1
@@ -565,13 +610,18 @@ exit /b 0
 
 :VerifyExtractedSource
 set "S_PATH=%~1"
-set "S_COUNT="
-for /f "usebackq tokens=* delims= " %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ Write-Output 0; exit 0 }; $items=(Get-ChildItem -LiteralPath $p -Force -Recurse); $c=0; foreach($i in $items){ if($i.PSIsContainer){ continue }; $c++ }; Write-Output $c }" "%S_PATH%" 2^>^> "%LOGFILE%"`) do set "S_COUNT=%%C"
-if not defined S_COUNT exit /b 1
+set "S_COUNT=0"
+for /f "usebackq tokens=* delims= " %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p) $ErrorActionPreference='SilentlyContinue'; $c=0; try { if(Test-Path -LiteralPath $p){ $c=(Get-ChildItem -LiteralPath $p -Force -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count } } catch { } [Console]::WriteLine($c) }" "%S_PATH%" 2^>^> "%LOGFILE%"`) do set "S_COUNT=%%C"
 set "S_NONNUM="
 for /f "delims=0123456789" %%D in ("%S_COUNT%") do set "S_NONNUM=1"
-if defined S_NONNUM exit /b 1
-if %S_COUNT% LSS 1 exit /b 1
+if defined S_NONNUM (
+  call :Log "ERROR: Extracted source verification returned non-numeric count: %S_COUNT%"
+  exit /b 1
+)
+if %S_COUNT% LSS 1 (
+  call :Log "ERROR: Extracted source verification failed (no files detected)."
+  exit /b 1
+)
 exit /b 0
 
 :DownloadFile
@@ -579,7 +629,7 @@ set "DL_SRC=%~1"
 set "DL_DST=%~2"
 set "DL_NAME=%~3"
 call :Log "Downloading: %DL_NAME%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($src,$dst,$name) $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { Import-Module BitsTransfer -ErrorAction Stop; $job=Start-BitsTransfer -Source $src -Destination $dst -Asynchronous -DisplayName $name; while($true){ $job=Get-BitsTransfer -Id $job.Id; if($job.JobState -in @('Transferred','Error','Cancelled')){ break }; $pct=0; if($job.BytesTotal -gt 0){ $pct=[int](100*$job.BytesTransferred/$job.BytesTotal) }; Write-Progress -Activity ('Downloading '+$name) -Status ($pct.ToString()+'%%') -PercentComplete $pct; Start-Sleep -Milliseconds 200 }; if($job.JobState -eq 'Transferred'){ Complete-BitsTransfer $job; Write-Progress -Activity ('Downloading '+$name) -Completed; exit 0 } else { try { Remove-BitsTransfer $job -Confirm:$false } catch { }; throw 'BITS download failed' } } catch { Invoke-WebRequest -UseBasicParsing -Uri $src -OutFile $dst; exit 0 } }" "%DL_SRC%" "%DL_DST%" "%DL_NAME%" >> "%LOGFILE%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($src,$dst,$name) $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $attempts=3; for($i=1;$i -le $attempts;$i++){ try { if(Test-Path -LiteralPath $dst){ Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue } try { Import-Module BitsTransfer -ErrorAction Stop; $job=Start-BitsTransfer -Source $src -Destination $dst -Asynchronous -DisplayName $name; while($true){ $job=Get-BitsTransfer -Id $job.Id; if($job.JobState -in @('Transferred','Error','Cancelled')){ break }; $pct=0; if($job.BytesTotal -gt 0){ $pct=[int](100*$job.BytesTransferred/$job.BytesTotal) }; Write-Progress -Activity ('Downloading '+$name) -Status ($pct.ToString()+'%%') -PercentComplete $pct; Start-Sleep -Milliseconds 200 }; if($job.JobState -eq 'Transferred'){ Complete-BitsTransfer $job; Write-Progress -Activity ('Downloading '+$name) -Completed } else { try { Remove-BitsTransfer $job -Confirm:$false } catch { }; throw 'BITS download failed' } } catch { Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $src -OutFile $dst } if(-not (Test-Path -LiteralPath $dst)){ throw 'Download did not create file' }; $len=(Get-Item -LiteralPath $dst).Length; if($len -lt 1){ throw 'Downloaded file is empty (0 bytes)' }; exit 0 } catch { if($i -lt $attempts){ Start-Sleep -Seconds (2*$i); continue } else { throw } } } }" "%DL_SRC%" "%DL_DST%" "%DL_NAME%" >> "%LOGFILE%" 2>&1
 if errorlevel 1 exit /b 1
 exit /b 0
 
@@ -665,15 +715,197 @@ exit /b 2
 
 :VerifyInstall
 set "V_PATH=%~1"
-set "V_COUNT="
-for /f "usebackq tokens=* delims= " %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p,$logPath,$company) $ErrorActionPreference='Stop'; if(-not (Test-Path -LiteralPath $p)){ Write-Output 0; exit 0 }; $items=(Get-ChildItem -LiteralPath $p -Force -Recurse); $c=0; foreach($i in $items){ if($i.PSIsContainer){ continue }; $n=$i.Name; if($n -like '*Installer.log'){ continue }; if($company -and ($n -ieq ($company+'Installer.log'))){ continue }; if($logPath -and ($i.FullName -eq $logPath)){ continue }; $c++ }; Write-Output $c }" "%V_PATH%" "%LOGFILE%" "%COMPANY%" 2^>^> "%LOGFILE%"`) do set "V_COUNT=%%C"
-if not defined V_COUNT exit /b 1
+set "V_COUNT=0"
+for /f "usebackq tokens=* delims= " %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($p,$logPath,$company) $ErrorActionPreference='SilentlyContinue'; $c=0; try { if(Test-Path -LiteralPath $p){ $files=Get-ChildItem -LiteralPath $p -Force -Recurse -File -ErrorAction SilentlyContinue; foreach($i in $files){ $n=$i.Name; if($n -like '*Installer.log'){ continue }; if($n -ieq '.__installing'){ continue }; if($n -ieq '.installed_version'){ continue }; if($company -and ($n -ieq ($company+'Installer.log'))){ continue }; if($logPath -and ($i.FullName -ieq $logPath)){ continue }; $c++ } } } catch { } [Console]::WriteLine($c) }" "%V_PATH%" "%LOGFILE%" "%COMPANY%" 2^>^> "%LOGFILE%"`) do set "V_COUNT=%%C"
 
 set "NONNUM="
 for /f "delims=0123456789" %%D in ("%V_COUNT%") do set "NONNUM=1"
-if defined NONNUM exit /b 1
+if defined NONNUM (
+  call :Log "ERROR: Installation verification returned non-numeric count: %V_COUNT%"
+  exit /b 1
+)
 
 set "INSTALLED_ITEMS=%V_COUNT%"
 call :Log "Installed item count: %INSTALLED_ITEMS%"
-if %INSTALLED_ITEMS% LSS 1 exit /b 1
+if %INSTALLED_ITEMS% LSS 1 (
+  call :Log "ERROR: Installation verification failed (no installed files detected after filtering)."
+  exit /b 1
+)
 exit /b 0
+
+:PostInstallUpdateCheck
+if not defined INSTALL_ROOT exit /b 0
+
+call :Log "Post-install update check started."
+call :CheckInternet
+if errorlevel 1 (
+  call :Log "Post-install update check skipped (no internet connection)."
+  echo.
+  echo Skipping update check (no internet connection).
+  echo.
+  exit /b 0
+)
+echo.
+echo Checking for updates to installed macros...
+
+set "OUTDATED="
+set "OUTDATED_COUNT=0"
+
+call :CheckOneMacroUpdate "Rivals AFK Macro" "Rivals-Afk-Macro"
+call :CheckOneMacroUpdate "Adopt Me Task Macro" "Adopt-Me-Task-Macro"
+call :CheckOneMacroUpdate "Macro Creator" "Macro-Creator"
+
+if %OUTDATED_COUNT% LEQ 0 (
+  call :Log "No outdated installed macros detected."
+  echo All installed macros are up to date.
+  echo.
+  exit /b 0
+)
+
+echo.
+echo The following installed macros have updates available:
+echo !OUTDATED!
+echo.
+choice /C YN /N /M "Update them now? (Y = Yes, N = No)"
+if errorlevel 2 (
+  call :Log "User chose not to update outdated macros."
+  echo.
+  exit /b 0
+)
+
+call :Log "User chose to update outdated macros."
+set "ORIG_TARGET_DIR=%TARGET_DIR%"
+set "ORIG_MACRO_NAME=%MACRO_NAME%"
+set "ORIG_MACRO_REPO=%MACRO_REPO%"
+call :UpdateOutdatedMacros
+set "TARGET_DIR=%ORIG_TARGET_DIR%"
+set "MACRO_NAME=%ORIG_MACRO_NAME%"
+set "MACRO_REPO=%ORIG_MACRO_REPO%"
+echo.
+exit /b 0
+
+:CheckOneMacroUpdate
+set "CHK_NAME=%~1"
+set "CHK_REPO=%~2"
+set "CHK_DIR=%INSTALL_ROOT%\%CHK_NAME%"
+if not exist "%CHK_DIR%" exit /b 0
+
+set "CHK_VERFILE=%CHK_DIR%\.installed_version"
+if not exist "%CHK_VERFILE%" exit /b 0
+
+set "LOCAL_TAG="
+set /p "LOCAL_TAG="<"%CHK_VERFILE%"
+if not defined LOCAL_TAG set "LOCAL_TAG=unknown"
+if /i "%LOCAL_TAG%"=="unknown" exit /b 0
+
+set "LATEST_TAG="
+for /f "usebackq tokens=* delims= " %%T in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $tag=$null; for($i=1;$i -le 3;$i++){ try { $r=Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/%GITHUB_OWNER%/%CHK_REPO%/releases/latest'); if($r -and $r.tag_name){ $tag=$r.tag_name; break } } catch { try { if($_.Exception -and $_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 403){ break } } catch { } Start-Sleep -Seconds (2*$i) } }; if($tag){ Write-Output $tag }" 2^>^> "%LOGFILE%"`) do set "LATEST_TAG=%%T"
+
+if not defined LATEST_TAG (
+  call :Log "Update check: unable to resolve latest tag for %CHK_NAME% (%CHK_REPO%). Possibly offline, rate limited, or no releases."
+  exit /b 0
+)
+
+if /i not "%LOCAL_TAG%"=="%LATEST_TAG%" (
+  set /a OUTDATED_COUNT+=1
+  if not defined OUTDATED (
+    set "OUTDATED=%CHK_NAME% (%LOCAL_TAG% -> %LATEST_TAG%)"
+  ) else (
+    set "OUTDATED=!OUTDATED!, %CHK_NAME% (%LOCAL_TAG% -> %LATEST_TAG%)"
+  )
+  call :Log "Update available for %CHK_NAME%: %LOCAL_TAG% -> %LATEST_TAG%"
+)
+
+exit /b 0
+
+:UpdateOutdatedMacros
+call :UpdateMacroIfOutdated "Rivals AFK Macro" "Rivals-Afk-Macro"
+call :UpdateMacroIfOutdated "Adopt Me Task Macro" "Adopt-Me-Task-Macro"
+call :UpdateMacroIfOutdated "Macro Creator" "Macro-Creator"
+exit /b 0
+
+:UpdateMacroIfOutdated
+set "U_NAME=%~1"
+set "U_REPO=%~2"
+set "U_DIR=%INSTALL_ROOT%\%U_NAME%"
+if not exist "%U_DIR%" exit /b 0
+if not exist "%U_DIR%\.installed_version" exit /b 0
+
+set "U_LOCAL="
+set /p "U_LOCAL="<"%U_DIR%\.installed_version"
+if not defined U_LOCAL exit /b 0
+if /i "%U_LOCAL%"=="unknown" exit /b 0
+
+set "U_LATEST="
+for /f "usebackq tokens=* delims= " %%T in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $headers=@{'User-Agent'='BestFreeSoftwareCoInstaller'}; $tag=$null; for($i=1;$i -le 3;$i++){ try { $r=Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/%GITHUB_OWNER%/%U_REPO%/releases/latest'); if($r -and $r.tag_name){ $tag=$r.tag_name; break } } catch { try { if($_.Exception -and $_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 403){ break } } catch { } Start-Sleep -Seconds (2*$i) } }; if($tag){ Write-Output $tag }" 2^>^> "%LOGFILE%"`) do set "U_LATEST=%%T"
+if not defined U_LATEST exit /b 0
+
+if /i "%U_LOCAL%"=="%U_LATEST%" exit /b 0
+
+echo.
+echo Updating %U_NAME%...
+call :Log "Updating %U_NAME% in place."
+
+call :InstallMacroDirect "%U_NAME%" "%U_REPO%" "%U_DIR%"
+if errorlevel 1 (
+  call :Log "ERROR: Update failed for %U_NAME%."
+  echo Update failed for %U_NAME%. See log:
+  echo %LOGFILE%
+  echo.
+  exit /b 0
+)
+echo Updated %U_NAME% successfully.
+exit /b 0
+
+:InstallMacroDirect
+setlocal EnableExtensions EnableDelayedExpansion
+set "M_NAME=%~1"
+set "M_REPO=%~2"
+set "M_TARGET=%~3"
+
+if not defined M_TARGET ( endlocal & exit /b 1 )
+if not defined M_REPO ( endlocal & exit /b 1 )
+
+set "MACRO_NAME=%M_NAME%"
+set "MACRO_REPO=%M_REPO%"
+set "TARGET_DIR=%M_TARGET%"
+
+call :Progress 10 "Preparing update"
+call :CheckInternet
+if errorlevel 1 ( endlocal & exit /b 1 )
+
+mkdir "%WORKDIR%\download" >nul 2>&1
+mkdir "%WORKDIR%\extract" >nul 2>&1
+
+set "INSTALL_MARKER=%TARGET_DIR%\.__installing"
+> "%INSTALL_MARKER%" echo Updating... 2>> "%LOGFILE%"
+
+call :Progress 50 "Downloading from GitHub"
+set "PKGFILE=%WORKDIR%\download\%MACRO_REPO%.zip"
+call :DownloadLatestRelease "%GITHUB_OWNER%" "%MACRO_REPO%" "%PKGFILE%"
+if errorlevel 1 ( endlocal & exit /b 1 )
+
+call :Progress 70 "Extracting archive"
+call :ExtractZip "%PKGFILE%" "%WORKDIR%\extract"
+if errorlevel 1 ( endlocal & exit /b 1 )
+
+call :VerifyExtractedSource "%EXTRACT_SRC%"
+if errorlevel 1 ( endlocal & exit /b 1 )
+
+call :Progress 80 "Copying files"
+call :CopyToTarget "%EXTRACT_SRC%" "%TARGET_DIR%"
+if errorlevel 1 ( endlocal & exit /b 1 )
+
+call :Progress 90 "Verifying installation"
+call :VerifyInstall "%TARGET_DIR%"
+if errorlevel 1 ( endlocal & exit /b 1 )
+
+call :Progress 100 "Finalizing update"
+if defined INSTALL_MARKER if exist "%INSTALL_MARKER%" del /f /q "%INSTALL_MARKER%" >nul 2>> "%LOGFILE%"
+if defined LAST_RELEASE_TAG (
+  > "%TARGET_DIR%\.installed_version" echo !LAST_RELEASE_TAG! 2>> "%LOGFILE%"
+) else (
+  > "%TARGET_DIR%\.installed_version" echo unknown 2>> "%LOGFILE%"
+)
+
+endlocal & exit /b 0
