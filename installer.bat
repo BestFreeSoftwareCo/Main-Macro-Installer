@@ -426,6 +426,19 @@ call :Progress 25 "Creating folders"
 mkdir "%WORKDIR%\download" >nul 2>&1
 mkdir "%WORKDIR%\extract" >nul 2>&1
 
+if not exist "%TARGET_DIR%\" (
+  mkdir "%TARGET_DIR%" >nul 2>&1
+)
+
+if not exist "%TARGET_DIR%\" (
+  call :Log "ERROR: Target directory missing after setup: %TARGET_DIR%"
+  echo.
+  echo Unable to prepare the install folder:
+  echo %TARGET_DIR%
+  pause
+  exit /b 1
+)
+
 set "INSTALL_MARKER=%TARGET_DIR%\.__installing"
 > "%INSTALL_MARKER%" echo Installing... 2>> "%LOGFILE%"
 
