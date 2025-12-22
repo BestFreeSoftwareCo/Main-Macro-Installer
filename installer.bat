@@ -100,6 +100,7 @@ cls
 echo ========================================
 echo        BestFreeSoftwareCo Installer
 echo ========================================
+echo Visit https://bestfreesoftwareco.github.io/ for news, guides, and updates.
 echo.
 exit /b 0
 
@@ -248,11 +249,12 @@ echo.
 echo [1] Rivals AFK Macro                (Released)
 echo [2] Adopt Me Task Macro             (Released)
 echo [3] Macro Creator                   (Released)
-echo [4] Grow A Garden Auto Buy          (Unreleased - Check Discord)
-echo [5] Plants Vs Brainrots Auto Buy    (Unreleased - Check Discord)
-echo [6] 99 Nights Auto Eat              (Unreleased - Check Discord)
-echo [7] Auto Clicker                    (Unreleased - Check Discord)
-echo [8] Blade Ball Playtime Macro       (Unreleased - Check Discord)
+echo [4] Forge Auto Mine Macro           (Released)
+echo [5] Grow A Garden Auto Buy          (Unreleased - Check Discord)
+echo [6] Plants Vs Brainrots Auto Buy    (Unreleased - Check Discord)
+echo [7] 99 Nights Auto Eat              (Unreleased - Check Discord)
+echo [8] Auto Clicker                    (Unreleased - Check Discord)
+echo [9] Blade Ball Playtime Macro       (Unreleased - Check Discord)
 echo.
 set /p "MACROSEL=Type the number of what you would like to install: "
 for /f "tokens=* delims= " %%A in ("%MACROSEL%") do set "MACROSEL=%%A"
@@ -272,12 +274,17 @@ if "%MACROSEL%"=="3" (
   set "MACRO_REPO=Macro-Creator"
   exit /b 0
 )
+if "%MACROSEL%"=="4" (
+  set "MACRO_NAME=Forge Auto Mine Macro"
+  set "MACRO_REPO=Forge-Macro---Auto-Mine-v1-"
+  exit /b 0
+)
 
-if "%MACROSEL%"=="4" goto UnreleasedMacro
 if "%MACROSEL%"=="5" goto UnreleasedMacro
 if "%MACROSEL%"=="6" goto UnreleasedMacro
 if "%MACROSEL%"=="7" goto UnreleasedMacro
 if "%MACROSEL%"=="8" goto UnreleasedMacro
+if "%MACROSEL%"=="9" goto UnreleasedMacro
 
 echo.
 echo Invalid input. Please try again.
@@ -497,6 +504,7 @@ echo Dependencies Installed: %DEP_SUMMARY%
 echo Location: %TARGET_DIR%
 echo Installed Items: %INSTALLED_ITEMS%
 echo.
+echo Visit https://bestfreesoftwareco.github.io/ for the latest tutorials and support.
 call :PostInstallUpdateCheck
 echo Thank you for using BestFreeSoftwareCo software!
 echo.
